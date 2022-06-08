@@ -5,6 +5,7 @@ import sys
 from PyQt5.QtWidgets import QApplication, QMainWindow,QFileDialog
 from PyQt5.QtCore import pyqtSignal, QThread
 from TopicDetection import Ui_Form
+from PyQt5.QtCore import QDir
 
 #gensim包
 import gensim
@@ -16,26 +17,28 @@ import os
 import pandas as pd
 import nltk
 import string
-from sklearn.feature_extraction.text import CountVectorizer
-from sklearn.decomposition import LatentDirichletAllocation
-import numpy as np
 from nltk.corpus import stopwords
 from nltk.stem.porter import PorterStemmer
 
-n_topics=8
-alpha=50/n_topics
-beta=0.01
+
+#选择文档包
+target_path='not_chosen_yet'
+# 生成空的pandas表
+data = pd.DataFrame(columns=('FileName', 'content'))
+
+n_topics=-1
+alpha=-0.01
+beta=-0.01
 
 class ProcessThread(QThread):
     signal = pyqtSignal(str)  # 括号里填写信号传递的参数
-    signal2 =pyqtSignal(LatentDirichletAllocation,object,int)
     signal_topic_word=pyqtSignal(LdaModel,int)
+    signal_classify=pyqtSignal(int,pd.DataFrame)
+    signal_coherence=pyqtSignal(float)
+    current_dir = QDir.currentPath()
 
-    output_path = 'D:/PycharmProjects/pyqt5/lda/result'
-    file_path = 'D:/PycharmProjects/pyqt5/lda/data'
-
-    dic_file = "D:/PycharmProjects/pyqt5/lda/stop_dic/dict.txt"
-    stop_file = "D:/PycharmProjects/pyqt5/lda/stop_dic/stopwords.txt"
+    dic_file = "./lda/stop_dic/dict.txt"
+    stop_file = "./lda/stop_dic/stopwords.txt"
 
     def __init__(self):
         super(ProcessThread, self).__init__()
@@ -45,16 +48,12 @@ class ProcessThread(QThread):
         """
         进行任务操作，主要的逻辑操作,返回结果
         """
-        self.signal.emit("start analysing...")
-
-        os.chdir(self.file_path)
-        data = pd.read_excel("data_en.xlsx")  # content type
-        os.chdir(self.output_path)
+        self.signal.emit("start analyzing...")
 
         #doc_list保存每篇文章(raw)
         doc_list=[]
-        #for i in range(len(data.content)):
-        for i in range(5):
+        for i in range(len(data.content)):
+        #for i in range(5):
             doc_list.append(data.content[i])
 
         #processed_doc保存预处理及分词后的文本
@@ -90,15 +89,11 @@ class ProcessThread(QThread):
         dictionary=gensim.corpora.Dictionary(processed_doc)
         corpus=[dictionary.doc2bow(doc) for doc in processed_doc]
 
-
         # # 设置这个能够看到模型的训练进度
         # import logging
         # logging.basicConfig(format='%(asctime)s : %(levelname)s : %(message)s', level=logging.INFO)
 
-
-
-        # Set training parameters.
-
+        #设置模型参数
         chunksize = 2000
         passes = 20
         iterations = 400
@@ -108,96 +103,66 @@ class ProcessThread(QThread):
         temp = dictionary[0]  # This is only to "load" the dictionary.
         id2word = dictionary.id2token
 
-        model = LdaModel(
-            corpus=corpus,
-            id2word=id2word,
-            chunksize=chunksize,
-            alpha=alpha,
-            eta=beta,
-            iterations=iterations,
-            num_topics=n_topics,
-            passes=passes,
-            eval_every=eval_every
-        )
+        if (alpha == -0.01) | (beta == -0.01):
+            model = LdaModel(
+                corpus=corpus,
+                id2word=id2word,
+                chunksize=chunksize,
+                alpha='auto',
+                eta='auto',
+                iterations=iterations,
+                num_topics=n_topics,
+                passes=passes,
+                eval_every=eval_every
+            )
+        else:
+            model = LdaModel(
+                corpus=corpus,
+                id2word=id2word,
+                chunksize=chunksize,
+                alpha=alpha,
+                eta=beta,
+                iterations=iterations,
+                num_topics=n_topics,
+                passes=passes,
+                eval_every=eval_every
+            )
 
-        model.save('qzone.model')  # 将模型保存到硬盘
-
-        # top_topics = model.top_topics(corpus)  # , num_words=20)
-        #
-        # # Average topic coherence is the sum of topic coherences of all topics, divided by the number of topics.
-        # avg_topic_coherence = sum([t[1] for t in top_topics]) / n_topics
-        # print('Average topic coherence: %.4f.' % avg_topic_coherence)
-        #
-
-        # pprint(top_topics)
+        # model.save('qzone.model')  # 将模型保存到硬盘
 
         #主题对应词语
-        #topic_list = model.print_topics(n_topics)
-        #print(topic_list)
-        pprint(model.print_topics())
+        # pprint(model.print_topics())
         self.signal_topic_word.emit(model,n_topics)
 
-        #文章对应主题
-        for i in range(len(corpus)):
-
-            print('no.%d doc: '%i)
-            doc_lda=model[corpus[i]]
-            print(doc_lda)
-
+        # #文章对应主题
+        # for i in range(len(corpus)):
+        #     tem_file_name=data.iloc[i,0]
+        #     print(tem_file_name+":")
+        #     doc_lda=model[corpus[i]]
+        #     print(doc_lda)
 
         #一致性
         from gensim.models import CoherenceModel
         coherence_model_lda = CoherenceModel(model=model, texts=processed_doc, dictionary=dictionary,
                                              coherence='c_v')
         coherence_lda = coherence_model_lda.get_coherence()
-        print('\nCoherence Score: ', coherence_lda)  # 越高越好
+        # print('\nCoherence Score: ', coherence_lda)  # 越高越好
+        self.signal_coherence.emit(coherence_lda)
 
-#         n_features = 1000  # 提取1000个特征词语
-#         tf_vectorizer = CountVectorizer(strip_accents='unicode',
-#                                         max_features=n_features,
-#                                         stop_words=None,
-#                                         max_df=0.5,
-#                                         min_df=10)
-#         tf = tf_vectorizer.fit_transform(data.content_cutted)
-#
-# #        n_topics = 8  # 提取8个主题
-# #        n_topics = MyMainForm.LineEdit_para1
-#         lda = LatentDirichletAllocation(n_components=n_topics, #主题数量
-#                                         max_iter=50, #迭代次数
-#                                         learning_method='batch',
-#                                         doc_topic_prior=alpha,
-#                                         topic_word_prior=beta,
-#                                         random_state=0)
-#         lda.fit(tf)
+        #打标签(记录在data中)
+        topic_id_list=[]
+        for i,row in enumerate(model[corpus]):
+            row = sorted(row, key=lambda x: (x[1]), reverse=True)
+            for j, (topic_id, prop_topic) in enumerate(row):
+                if j == 0:
+                    topic_id_list.append(topic_id)
+                else:
+                    break
 
-#         ###########每个主题对应词语
-#         n_top_words = 25
-#         tf_feature_names = tf_vectorizer.get_feature_names_out()
-# #        topic_word = print_top_words(lda, tf_feature_names, n_top_words)
-#         self.signal2.emit(lda,tf_feature_names,n_top_words)
-#
-#         ###########输出每篇文章对应主题
-#         topics = lda.transform(tf)
-#         topic = []
-#         for t in topics:
-#             topic.append(list(t).index(np.max(t)))
-#         data['topic'] = topic
-#         data.to_excel("data_topic.xlsx", index=False)
-#
-#         ###########困惑度
-#         plexs = []
-#         n_max_topics = 16
-#         for i in range(1, n_max_topics):
-#             print(i)
-#             lda = LatentDirichletAllocation(n_components=i, max_iter=50,
-#                                             learning_method='batch',
-#                                             random_state=0)
-#             lda.fit(tf)
-#             print(lda.perplexity(tf))
-#             plexs.append(lda.perplexity(tf))
+        data.insert(loc=len(data.columns), column='topic_id', value=topic_id_list)
 
+        self.signal_classify.emit(n_topics,data)
         self.signal.emit("complete")  # 发射信号
-
 
 class MyMainForm(QMainWindow, Ui_Form):
     def __init__(self, parent=None):
@@ -212,23 +177,54 @@ class MyMainForm(QMainWindow, Ui_Form):
         global beta
 
         n_topics=int(self.LineEdit_para1.text())
-        alpha=float(self.LineEdit_para2.text())
-        beta=float(self.LineEdit_para3.text())
+        if self.LineEdit_para2.text() !='':
+            alpha = float(self.LineEdit_para2.text())
+        if self.LineEdit_para3.text() != '':
+            beta = float(self.LineEdit_para3.text())
 
         self.thread = ProcessThread()
         self.thread.signal.connect(self.callback)
-        self.thread.signal2.connect(self.print_topic_word)
         self.thread.signal_topic_word.connect(self.print_topic)
+        self.thread.signal_classify.connect(self.doc_classify)
+        self.thread.signal_coherence.connect(self.print_coherence)
         self.thread.start()
+
+
+#读取文档集合包中的文件，加载到data中
+    def openfile(self):
+        global target_path
+        global data
+        cur_dir=QDir.currentPath()
+        target_path=QFileDialog.getExistingDirectory(self,'打开文件夹',cur_dir)
+        if target_path:
+            files = os.listdir(target_path)
+
+            for i, file in enumerate(files):  # 遍历文件夹
+                location = os.path.join(target_path, file)
+                # 1
+                file_name = file
+                # 2
+                with open(location, "r", encoding='utf-8') as f:  # 打开文件
+                    content = f.read().replace('\n', ' ')
+                    f.close()
+                data.loc[i] = [file_name, content]
+
+    def showresult(self):
+        global target_path
+        tmp_path='./'
+        if target_path!='not_chosen_yet':
+            tmp_path=target_path
+
+        fname,ftype = QFileDialog.getOpenFileName(self, "打开文件", tmp_path,
+                                                  "Txt (*.txt)")
+        if fname:
+            with open(fname, "r", encoding='utf-8') as f:  # 打开文件
+                content = f.read()
+                f.close()
+            self.textBrowser3.setText(str(content))
 
     def callback(self, msg):
         self.textBrowser.append(str(msg))
-
-    def print_topic_word(self,model, feature_names, n_top_words):
-        for topic_idx, topic in enumerate(model.components_):
-            self.textBrowser.append("Topic #%d:" % topic_idx)
-            topic_w = " ".join([feature_names[i] for i in topic.argsort()[:-n_top_words - 1:-1]])
-            self.textBrowser.append(str(topic_w))
 
     def print_topic(self,model,n_topics):
         topic_list = model.print_topics(n_topics)
@@ -236,13 +232,25 @@ class MyMainForm(QMainWindow, Ui_Form):
             self.textBrowser.append("Topic #%d:" % topic[0])
             self.textBrowser.append(str(topic[1]))
 
+    def doc_classify(self,n_topics,data):
+        topic_lists = [[] for _ in range(n_topics)]
+        for i in range(len(data.content)):
+            tmp_id = data.iloc[i, 2]
+            tmp_name = data.iloc[i, 0]
+            topic_lists[tmp_id].append(tmp_name)
 
-    def openfile(self):
-        openfile_name=QFileDialog.getOpenFileName(self, "打开文件", 'c://', '图像文件(*.jpg *.png)')
-#        fname, _ = QFileDialog.getOpenFileName(self, "打开文件", '.', '图像文件(*.jpg *.png)')
+        # print(topic_lists)
+        for i, topic in enumerate(topic_lists):
+            self.textBrowser2.append("第%d个主题:" % i)
+            #print("第%d个主题:" % i)
+            tmp_doc=' '
+            for doc in topic:
+                tmp_doc=tmp_doc+' '+doc
+                #print(doc, end=" ")
+            self.textBrowser2.append(tmp_doc)
 
-    def showresult(self):
-        os.system('D:/PycharmProjects/pyqt5/lda/result/data_topic.xlsx')
+    def print_coherence(self,coherence):
+        self.textBrowser.append("Coherence Score:  "+ str(coherence))
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
